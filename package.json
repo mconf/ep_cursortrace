@@ -1,7 +1,7 @@
 {
   "name": "ep_cursortrace",
   "description": "Show cursor/caret movements of other users in real time",
-  "version": "3.1.8",
+  "version": "3.1.18",
   "author": "RedHog (Egil Moeller) <egil.moller@freecode.no>",
   "repository": "git@github.com:redhog/ep_cursortrace.git",
   "contributors": [
@@ -13,31 +13,19 @@
   ],
   "dependencies": {},
   "engines": {
-    "node": ">=10.13.0"
+    "node": ">=18.0.0"
   },
   "funding": {
     "type": "individual",
-    "url": "http://etherpad.org/"
+    "url": "https://etherpad.org/"
   },
   "devDependencies": {
-    "eslint": "^7.18.0",
-    "eslint-config-etherpad": "^1.0.24",
-    "eslint-plugin-eslint-comments": "^3.2.0",
-    "eslint-plugin-mocha": "^8.0.0",
-    "eslint-plugin-node": "^11.1.0",
-    "eslint-plugin-prefer-arrow": "^1.2.3",
-    "eslint-plugin-promise": "^4.2.1",
-    "eslint-plugin-you-dont-need-lodash-underscore": "^6.10.0"
-  },
-  "eslintConfig": {
-    "root": true,
-    "extends": "etherpad/plugin"
+    "eslint": "^8.57.0",
+    "eslint-config-etherpad": "^4.0.4",
+    "typescript": "^5.4.2"
   },
   "scripts": {
     "lint": "eslint .",
     "lint:fix": "eslint --fix ."
-  },
-  "peerDependencies": {
-    "ep_etherpad-lite": ">=1.8.6"
   }
 }
