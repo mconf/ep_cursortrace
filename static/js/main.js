@@ -4,6 +4,11 @@ let initiated = false;
 let last = undefined;
 let globalKey = 0;
 
+// queue & timer for throttling:
+let messageQueue = {};       // { authorId: payload }
+let processTimer = null;
+const PROCESS_DELAY = 50;    // 50ms throttle window
+
 exports.aceInitInnerdocbodyHead = (hookName, args, cb) => {
   const url = '../static/plugins/ep_cursortrace/static/css/ace_inner.css';
   args.iframeHTML.push(`<link rel="stylesheet" type="text/css" href="${url}"/>`);
@@ -27,7 +32,9 @@ exports.getAuthorClassName = (author) => {
 exports.className2Author = (className) => {
   if (className.substring(0, 7) === 'author-') {
     return className.substring(7).replace(/[a-y0-9]+|-|z.+?z/g, (cc) => {
-      if (cc === '-') { return '.'; } else if (cc.charAt(0) === 'z') {
+      if (cc === '-') {
+        return '.';
+      } else if (cc.charAt(0) === 'z') {
         return String.fromCharCode(Number(cc.slice(1, -1)));
       } else {
         return cc;
@@ -41,9 +48,13 @@ exports.aceEditEvent = (hook_name, args) => {
   // null (no last cursor) and [line, col]
   // The AceEditEvent because it usually applies to selected items and isn't
   // really so mucha bout current position.
-  const caretMoving = ((args.callstack.editEvent.eventType === 'handleClick') ||
-      (args.callstack.type === 'handleKeyEvent') || (args.callstack.type === 'idleWorkTimer'));
-  if (caretMoving && initiated) { // Note that we have to use idle timer to get the mouse position
+  const caretMoving = (
+    (args.callstack.editEvent.eventType === 'handleClick') ||
+    (args.callstack.type === 'handleKeyEvent') ||
+    (args.callstack.type === 'idleWorkTimer')
+  );
+
+  if (caretMoving && initiated) {
     const Y = args.rep.selStart[0];
     const X = args.rep.selStart[1];
     if (!last || Y !== last[0] || X !== last[1]) { // If the position has changed
@@ -58,56 +69,81 @@ exports.aceEditEvent = (hook_name, args) => {
         padId,
         myAuthorId,
       };
-      last = [];
-      last[0] = Y;
-      last[1] = X;
+      last = [Y, X];
 
       // console.log("Sent message", message);
-      pad.collabClient.sendMessage(message); // Send the cursor position message to the server
+      pad.collabClient.sendMessage(message);
     }
   }
   return;
 };
 
+// Throttle the handleClientMessage_CUSTOM
 exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
   /* I NEED A REFACTOR, please */
   // A huge problem with this is that it runs BEFORE the dom has
   // been updated so edit events are always late..
-
   const action = context.payload.action;
   const authorId = context.payload.authorId;
-  if (pad.getUserId() === authorId) return false;
   // Dont process our own caret position (yes we do get it..) -- This is not a bug
-  const authorClass = exports.getAuthorClassName(authorId);
+  if (pad.getUserId() === authorId) return false;
 
   if (action === 'cursorPosition') {
-    // an author has sent this client a cursor position, we need to show it in the dom
-    let authorName = context.payload.authorName;
+    // Queue this author's latest cursor data
+    messageQueue[authorId] = context.payload;
+
+    // If not already scheduled, set a timer
+    if (!processTimer) {
+      processTimer = setTimeout(() => {
+        processTimer = null;
+        processQueuedMessages();
+      }, PROCESS_DELAY);
+    }
+  }
+
+  return cb();
+};
+
+// Process messages in bulk
+function processQueuedMessages() {
+  const queued = { ...messageQueue };
+  messageQueue = {}; // clear the queue
+
+  // For each author in the queue, run the DOM logic
+  Object.keys(queued).forEach((authorId) => {
+    const payload = queued[authorId];
+    if (!payload) return;
+
+    const authorClass = exports.getAuthorClassName(authorId);
+
+    let authorName = payload.authorName;
     if (authorName === 'null' || authorName == null) {
       // If the users username isn't set then display a smiley face
       authorName = '😊';
     }
     // +1 as Etherpad line numbers start at 1
-    const y = context.payload.locationY + 1;
-    let x = context.payload.locationX + 1;
+    const y = payload.locationY + 1;
+    let x = payload.locationX - 1;
+
     const inner = $('iframe[name="ace_outer"]').contents().find('iframe');
     let leftOffset;
     if (inner.length !== 0) {
-      leftOffset = parseInt($(inner).offset().left);
-      leftOffset += parseInt($(inner).css('padding-left'));
+      leftOffset = parseInt($(inner).offset().left) || 0;
+      leftOffset += parseInt($(inner).css('padding-left')) || 0;
     }
 
     let stickStyle = 'stickDown';
 
-    // Get the target Line
+    // Get the target line
     const div = $('iframe[name="ace_outer"]').contents()
-        .find('iframe').contents().find('#innerdocbody').find(`div:nth-child(${y})`);
+      .find('iframe').contents().find('#innerdocbody')
+      .find(`div:nth-child(${y})`);
 
-    const divWidth = div.width();
-    const divLineHeight = parseInt(getComputedStyle(div.get(0)).lineHeight);
     // Is the line visible yet?
     if (div.length !== 0) {
-      let top = $(div).offset().top; // A standard generic offset
+      const divWidth = div.width();
+      const divLineHeight = parseInt(getComputedStyle(div.get(0)).lineHeight);
+      let top = parseInt($(div).offset().top) || 0; // A standard generic offset
       // The problem we have here is we don't know the px X offset of the caret from the user
       // Because that's a blocker for now lets just put a nice little div on the left hand side..
       // SO here is how we do this..
@@ -116,12 +152,12 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
       // Delete everything after X chars
       // Measure the new width -- This gives us the offset without modifying the ACE Dom
       // Due to IE sucking this doesn't work in IE....
-
       // We need the offset of the innerdocbody on top too.
-      top += parseInt($('iframe[name="ace_outer"]').contents().find('iframe').css('paddingTop'));
+      top += parseInt($('iframe[name="ace_outer"]').contents()
+        .find('iframe').css('paddingTop')) || 0;
       // and the offset of the outerdocbody too. (for wide/narrow screens compatibility)
       top += parseInt($('iframe[name="ace_outer"]').contents().find('#outerdocbody')
-          .css('padding-top')) - 20;
+        .css('padding-top')) - 10;
 
       // Get the HTML, appending a dummy span to express the end of the line
       const html = $(div).html() + `<span>&#xFFEF;</span>`;
@@ -131,14 +167,17 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
 
       // if Div contains block attribute IE h1 or H2 then increment by the number
       // This is horrible but a limitation because I'm parsing HTML
-      if ($(div).children('span').length < 1) { x -= 1; }
+      if ($(div).children('span').length < 1) {
+        x -= 1;
+      }
 
       // Get the new string but maintain mark up
-      const newText = html_substr(html, (x));
+      const newText = html_substr(html, x);
 
+      // Insert a hidden measuring element
       // A load of ugly HTML that can prolly be moved to CSS
-      const newLine = `<span style='width:${divWidth}px; line-height:${divLineHeight}px;'
-          id='${authorWorker}' class='ghettoCursorXPos'>${newText}</span>`;
+      const newLine = `<span style='width:${divWidth}px; ; line-height:${divLineHeight}px;'
+        id='${authorWorker}' class='ghettoCursorXPos'>${newText}</span>`;
 
       // Set the globalKey to 0, we use this when we wrap the objects in a datakey
       globalKey = 0; // It's bad, messy, don't ever develop like this.
@@ -148,17 +187,27 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
 
       // Get the worker element
       const worker = $('iframe[name="ace_outer"]').contents()
-          .find('#outerdocbody').find(`#${authorWorker}`);
-
+        .find('#outerdocbody').find(`#${authorWorker}`);
       // Wrap the HTML in spans so we can find a char
       $(worker).html(wrap($(worker)));
       // console.log($(worker).html(), x);
+
+      // Copy relevant CSS from the line to match fonts
+      const lineStyles = window.getComputedStyle(div[0]);
+      worker.css({
+        'font-size': lineStyles.fontSize,
+        'font-family': lineStyles.fontFamily,
+        'line-height': lineStyles.lineHeight,
+        'white-space': lineStyles.whiteSpace,
+        'font-weight': lineStyles.fontWeight,
+        'letter-spacing': lineStyles.letterSpacing,
+      });
 
       // Get the Left offset of the x span
       const span = $(worker).find(`[data-key="${x - 1}"]`);
 
       // Get the width of the element (This is how far out X is in px);
-      let left;
+      let left = 0;
       if (span.length !== 0) {
         left = span.position().left;
       } else {
@@ -172,35 +221,22 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
       // plus the top offset minus the actual height of our focus span
       if (top <= 0) { // If the tooltip wont be visible to the user because it's too high up
         stickStyle = 'stickUp';
-        top += (span.height() * 2);
-        if (top < 0) { top = 0; } // handle case where caret is in 0,0
+        top += (span.height() || 12) * 2;
+        if (top < 0) top = 0; // handle case where caret is in 0,0
       }
 
       // Add the innerdocbody offset
-      left += leftOffset;
+      left += leftOffset || 0;
 
       // Add support for page view margins
-      let divMargin = $(div).css('margin-left');
-      let innerdocbodyMargin = $(div).parent().css('padding-left');
-      if (innerdocbodyMargin) {
-        innerdocbodyMargin = parseInt(innerdocbodyMargin);
-      } else {
-        innerdocbodyMargin = 0;
-      }
-      if (divMargin) {
-        divMargin = divMargin.replace('px', '');
-        // console.log("Margin is ", divMargin);
-        divMargin = parseInt(divMargin);
-        if ((divMargin + innerdocbodyMargin) > 0) {
-          // console.log("divMargin", divMargin);
-          left += divMargin;
-        }
-      }
+      let divMargin = parseInt($(div).css('margin-left')) || 0;
+      let innerdocbodyMargin = parseInt($(div).parent().css('padding-left')) || 0;
+      left += (divMargin + innerdocbodyMargin);
       left += 18;
 
       // Remove the element
       $('iframe[name="ace_outer"]').contents().find('#outerdocbody')
-          .contents().remove(`#${authorWorker}`);
+        .contents().remove(`#${authorWorker}`);
 
       // Author color
       const users = pad.collabClient.getConnectedUsers();
@@ -221,20 +257,19 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
 
           // Create a new Div for this author
           const $indicator = $(`<div class='caretindicator caret-${authorClass}'
-              style='height:16px; background-color:${color}'>
-              </div>`);
+            style='height:16px; background-color:${color}'>
+            </div>`);
           const $paragraphName = $(`<p class='stickp'>${authorName}</p>`);
-          
+
           //First insert elements into page to be able to use their widths to calculate when to switch stick to right
           $indicator.append($paragraphName);
           $(outBody).append($indicator);
-          
-          const absolutePositionOfPageEnd = div.offset().left + div.width() + leftOffset + 2*divMargin;
-          if(left > (absolutePositionOfPageEnd-$indicator.width())){
-            stickStyle = 'stickRight';
-            left = left-$indicator.width();
-          }
 
+          const absolutePositionOfPageEnd = div.offset().left + div.width() + leftOffset + 2 * divMargin;
+          if (left > (absolutePositionOfPageEnd - $indicator.width())) {
+            stickStyle = 'stickRight';
+            left = left - $indicator.width();
+          }
           $indicator.addClass(`${stickStyle}`);
           $paragraphName.addClass(`${stickStyle}`);
           $indicator.css('left', `${left}px`);
@@ -250,9 +285,8 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
         }
       });
     }
-  }
-  return cb();
-};
+  });
+}
 
 const html_substr = (str, count) => {
   const div = document.createElement('div');
@@ -280,7 +314,7 @@ const html_substr = (str, count) => {
       } else if (node.nodeType === 1 && node.childNodes && node.childNodes[0]) {
         walk(node, fn);
       }
-    } while (node = node.nextSibling); /* eslint-disable-line no-cond-assign */
+    } while ((node = node.nextSibling)); /* eslint-disable-line no-cond-assign */
   };
   walk(div, track);
   return div.innerHTML;
