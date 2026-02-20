@@ -7,7 +7,7 @@ let globalKey = 0;
 // queue & timer for throttling:
 let messageQueue = {};       // { authorId: payload }
 let processTimer = null;
-const PROCESS_DELAY = 50;    // 50ms throttle window
+const PROCESS_DELAY = 200;    // throttle window (ms)
 
 exports.aceInitInnerdocbodyHead = (hookName, args, cb) => {
   const url = '../static/plugins/ep_cursortrace/static/css/ace_inner.css';
