@@ -4,7 +4,12 @@ let initiated = false;
 let last = undefined;
 let globalKey = 0;
 
-// queue & timer for throttling:
+// Client-side throttle before sending cursor updates to server
+const CLIENT_CURSOR_THROTTLE_MS = 200;
+let pendingCursorUpdate = null;
+let cursorSendTimer = null;
+
+// queue & timer for throttling (incoming remote updates):
 let messageQueue = {};       // { authorId: payload }
 let processTimer = null;
 const PROCESS_DELAY = 200;    // 200ms throttle window
@@ -71,8 +76,7 @@ exports.aceEditEvent = (hook_name, args) => {
       };
       last = [Y, X];
 
-      // console.log("Sent message", message);
-      pad.collabClient.sendMessage(message);
+      queueCursorUpdate(message);
     }
   }
   return;
@@ -103,6 +107,29 @@ exports.handleClientMessage_CUSTOM = (hook, context, cb) => {
 
   return cb();
 };
+
+// Send the latest local cursor update at most once every CLIENT_CURSOR_THROTTLE_MS.
+function flushCursorUpdate() {
+  cursorSendTimer = null;
+
+  if (!pendingCursorUpdate) return;
+
+  const msg = pendingCursorUpdate;
+  pendingCursorUpdate = null;
+
+  // console.log('Sending throttled local cursor update', msg);
+  pad.collabClient.sendMessage(msg);
+}
+
+function queueCursorUpdate(msg) {
+  pendingCursorUpdate = msg;
+
+  if (cursorSendTimer) return;
+
+  cursorSendTimer = setTimeout(() => {
+    flushCursorUpdate();
+  }, CLIENT_CURSOR_THROTTLE_MS);
+}
 
 // Process messages in bulk
 function processQueuedMessages() {
