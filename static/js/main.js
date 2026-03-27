@@ -117,7 +117,6 @@ function flushCursorUpdate() {
   const msg = pendingCursorUpdate;
   pendingCursorUpdate = null;
 
-  // console.log('Sending throttled local cursor update', msg);
   pad.collabClient.sendMessage(msg);
 }
 
